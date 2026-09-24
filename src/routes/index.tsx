@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 
 const palette = ['#f7f3ff', '#17151e', '#b8b3c8', '#726b83', '#f04f74', '#ff7b54', '#ffc857', '#d6e84f', '#58d68d', '#42c6d6', '#5c8df6', '#a66cff']
 const brushSizes = [1, 2, 4, 8]
-const canvasPresets = [[32, 32], [64, 64], [128, 128], [256, 256]]
+const canvasPresets = [[2, 2], [32, 32], [64, 64], [128, 128], [256, 256]]
 type Point = { x: number; y: number }
 type Stroke = { points: Point[]; color: string; size: number; erase: boolean }
 type Fill = { x: number; y: number; color: string }
@@ -54,14 +54,30 @@ function PixelStudio() {
       if (!stroke.points.length) return
       context.save()
       context.globalCompositeOperation = stroke.erase ? 'destination-out' : 'source-over'
-      context.strokeStyle = stroke.color
-      context.lineWidth = stroke.size
-      context.lineCap = 'square'
-      context.lineJoin = 'miter'
-      context.beginPath()
-      context.moveTo(stroke.points[0].x, stroke.points[0].y)
-      stroke.points.slice(1).forEach(point => context.lineTo(point.x, point.y))
-      context.stroke()
+      context.fillStyle = stroke.color
+      const radius = Math.floor(stroke.size / 2)
+      const stamp = (point: Point) => {
+        const x = Math.floor(point.x) - radius
+        const y = Math.floor(point.y) - radius
+        context.fillRect(x, y, stroke.size, stroke.size)
+      }
+      for (let index = 0; index < stroke.points.length; index += 1) {
+        const point = stroke.points[index]
+        const previous = stroke.points[index - 1]
+        if (!previous) {
+          stamp(point)
+          continue
+        }
+        const distance = Math.max(Math.abs(point.x - previous.x), Math.abs(point.y - previous.y))
+        const steps = Math.max(1, Math.ceil(distance))
+        for (let step = 1; step <= steps; step += 1) {
+          const progress = step / steps
+          stamp({
+            x: previous.x + (point.x - previous.x) * progress,
+            y: previous.y + (point.y - previous.y) * progress,
+          })
+        }
+      }
       context.restore()
     })
   }, [fills])
@@ -77,8 +93,14 @@ function PixelStudio() {
     const start = (y * canvas.width + x) * 4
     const target = [image.data[start], image.data[start + 1], image.data[start + 2], image.data[start + 3]]
     const replacement = hexToRgba(color)
-    if (target.every((channel, index) => channel === replacement[index])) return
-    const matches = (index: number) => target.every((channel, offset) => image.data[index + offset] === channel)
+    const tolerance = 56
+    const matches = (index: number) => (
+      Math.abs(image.data[index] - target[0]) <= tolerance &&
+      Math.abs(image.data[index + 1] - target[1]) <= tolerance &&
+      Math.abs(image.data[index + 2] - target[2]) <= tolerance &&
+      Math.abs(image.data[index + 3] - target[3]) <= tolerance
+    )
+    if (matches(start)) return
     const queue: Point[] = [{ x, y }]
     const visited = new Uint8Array(canvas.width * canvas.height)
     const nextFills = [...fills]
@@ -119,7 +141,7 @@ function PixelStudio() {
       return
     }
     event.currentTarget.setPointerCapture(event.pointerId)
-    currentStroke.current = { points: [pointFromEvent(event)], color, size: brush, erase: tool === 'erase' }
+    currentStroke.current = { points: [pointFromEvent(event)], color, size: Math.min(brush, canvasSize(canvasRef.current)), erase: tool === 'erase' }
     setHistory(previous => [...previous, snapshot()])
     setRedo([])
     setDrawing(true)
@@ -169,6 +191,11 @@ function PixelStudio() {
 
   function hexToRgba(hex: string): number[] {
     return [Number.parseInt(hex.slice(1, 3), 16), Number.parseInt(hex.slice(3, 5), 16), Number.parseInt(hex.slice(5, 7), 16), 255]
+  }
+
+  function canvasSize(canvas: HTMLCanvasElement | null): number {
+    if (!canvas) return brush
+    return Math.max(1, Math.min(canvas.width, canvas.height))
   }
 
   const exportImage = () => {
